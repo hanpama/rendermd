@@ -2,17 +2,22 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"html/template"
-	"io"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
@@ -40,7 +45,7 @@ const htmlTemplate = `<!DOCTYPE html>
         /* ── Base ── */
         body {
             font-family: 'Noto Serif KR', 'Charter', 'Bitstream Charter', 'Iowan Old Style', Georgia, serif;
-            font-size: 6.75pt;
+            font-size: 7.2pt;
             line-height: 1.75;
             color: #1a1a1a;
             max-width: 780px;
@@ -59,7 +64,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         h1 {
-            font-size: 11pt;
+            font-size: 11.2pt;
             line-height: 1.35;
             margin: 0 0 0.25em 0;
             padding-bottom: 0.45em;
@@ -67,19 +72,19 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         h2 {
-            font-size: 8.5pt;
+            font-size: 8.8pt;
             margin: 2.4em 0 0.7em 0;
             padding-bottom: 0.3em;
             border-bottom: 1px solid #d0d0d0;
         }
 
         h3 {
-            font-size: 7.5pt;
+            font-size: 8pt;
             margin: 1.8em 0 0.5em 0;
         }
 
         h4 {
-            font-size: 6.75pt;
+            font-size: 7.2pt;
             margin: 1.4em 0 0.4em 0;
         }
 
@@ -114,7 +119,7 @@ const htmlTemplate = `<!DOCTYPE html>
         /* ── Inline code ── */
         code {
             font-family: 'IBM Plex Mono', 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
-            font-size: 5.75pt;
+            font-size: 6.4pt;
             background-color: #f3f4f6;
             border: 1px solid #e5e7eb;
             padding: 0.5px 3.5px;
@@ -125,7 +130,7 @@ const htmlTemplate = `<!DOCTYPE html>
         /* ── Code blocks ── */
         pre {
             font-family: 'IBM Plex Mono', 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
-            font-size: 5.25pt;
+            font-size: 5.6pt;
             line-height: 1.55;
             background-color: #f8f9fa;
             border: 1px solid #e8e8e8;
@@ -163,7 +168,7 @@ const htmlTemplate = `<!DOCTYPE html>
         table {
             border-collapse: collapse;
             margin: 0.9em 0 1.6em 0;
-            font-size: 6pt;
+            font-size: 6.4pt;
             width: 100%;
             line-height: 1.6;
         }
@@ -179,7 +184,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
         th {
             font-weight: 700;
-            font-size: 5.75pt;
+            font-size: 6.4pt;
             text-transform: uppercase;
             letter-spacing: 0.04em;
             color: #555;
@@ -270,8 +275,8 @@ type PageData struct {
 func main() {
 	var (
 		input  = flag.String("i", "", "Input markdown file")
-		output = flag.String("o", "", "Output HTML file (default: input_name.html)")
-		browse = flag.Bool("b", false, "Open the rendered HTML in browser")
+		output = flag.String("o", "", "Output PDF file (default: input_name.pdf)")
+		browse = flag.Bool("b", false, "Open the rendered PDF")
 	)
 
 	flag.Parse()
@@ -280,10 +285,10 @@ func main() {
 		if flag.NArg() > 0 {
 			*input = flag.Arg(0)
 		} else {
-			fmt.Println("Usage: rendermd -i input.md [-o output.html] [-b]")
-			fmt.Println("   or: rendermd input.md [output.html]")
+			fmt.Println("Usage: rendermd -i input.md [-o output.pdf] [-b]")
+			fmt.Println("   or: rendermd input.md [output.pdf]")
 			fmt.Println("\nOptions:")
-			fmt.Println("  -b    Open the rendered HTML in browser")
+			fmt.Println("  -b    Open the rendered PDF")
 			os.Exit(1)
 		}
 	}
@@ -293,7 +298,7 @@ func main() {
 			*output = flag.Arg(1)
 		} else {
 			base := strings.TrimSuffix(filepath.Base(*input), filepath.Ext(*input))
-			*output = base + ".html"
+			*output = base + ".pdf"
 		}
 	}
 
@@ -302,16 +307,25 @@ func main() {
 		log.Fatalf("Failed to read input file: %v", err)
 	}
 
-	html, err := renderMarkdown(content)
+	htmlContent, err := renderMarkdown(content)
 	if err != nil {
 		log.Fatalf("Failed to render markdown: %v", err)
 	}
 
 	title := strings.TrimSuffix(filepath.Base(*input), filepath.Ext(*input))
 
-	err = generateHTML(html, title, *output)
+	htmlStr, err := buildHTML(htmlContent, title)
 	if err != nil {
-		log.Fatalf("Failed to generate HTML: %v", err)
+		log.Fatalf("Failed to build HTML: %v", err)
+	}
+
+	pdfBuf, err := renderPDF(htmlStr)
+	if err != nil {
+		log.Fatalf("Failed to render PDF: %v", err)
+	}
+
+	if err := os.WriteFile(*output, pdfBuf, 0644); err != nil {
+		log.Fatalf("Failed to write PDF: %v", err)
 	}
 
 	fmt.Printf("Successfully rendered %s to %s\n", *input, *output)
@@ -321,11 +335,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to get absolute path: %v", err)
 		}
-
-		if err := openBrowser(absPath); err != nil {
-			log.Fatalf("Failed to open browser: %v", err)
+		if err := openFile(absPath); err != nil {
+			log.Fatalf("Failed to open file: %v", err)
 		}
-		fmt.Println("Opened in browser")
+		fmt.Println("Opened PDF")
 	}
 }
 
@@ -359,10 +372,10 @@ func renderMarkdown(source []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func generateHTML(content []byte, title string, outputPath string) error {
+func buildHTML(content []byte, title string) (string, error) {
 	tmpl, err := template.New("page").Parse(htmlTemplate)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	data := PageData{
@@ -370,22 +383,53 @@ func generateHTML(content []byte, title string, outputPath string) error {
 		Content: template.HTML(content),
 	}
 
-	var output io.Writer
-	if outputPath == "-" {
-		output = os.Stdout
-	} else {
-		file, err := os.Create(outputPath)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		output = file
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", err
 	}
 
-	return tmpl.Execute(output, data)
+	return buf.String(), nil
 }
 
-func openBrowser(path string) error {
+func renderPDF(htmlContent string) ([]byte, error) {
+	ctx, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+
+	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	dataURI := "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(htmlContent))
+
+	var pdfBuf []byte
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(dataURI),
+		// Mermaid 렌더링 대기
+		chromedp.Sleep(2*time.Second),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			buf, _, err := page.PrintToPDF().
+				WithPaperWidth(8.27).   // A4
+				WithPaperHeight(11.69). // A4
+				WithMarginTop(0.6).
+				WithMarginBottom(0.6).
+				WithMarginLeft(0.6).
+				WithMarginRight(0.6).
+				WithPrintBackground(true).
+				WithScale(math.Round(1.0*100) / 100).
+				Do(ctx)
+			if err != nil {
+				return err
+			}
+			pdfBuf = buf
+			return nil
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	return pdfBuf, nil
+}
+
+func openFile(path string) error {
 	var cmd *exec.Cmd
 
 	switch runtime.GOOS {
