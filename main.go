@@ -246,8 +246,10 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .mermaid svg {
+            width: auto !important;
+            max-width: 100%;
             max-height: 400px;
-            width: auto;
+            height: auto;
         }
     </style>
 </head>
@@ -262,7 +264,21 @@ const htmlTemplate = `<!DOCTYPE html>
             div.textContent = el.textContent;
             pre.parentElement.replaceChild(div, pre);
         });
-        mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+        mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { useMaxWidth: false }, sequence: { useMaxWidth: false }, gantt: { useMaxWidth: false } });
+        // Mermaid 렌더링 후 SVG를 viewBox의 절반 크기로 축소
+        setTimeout(function() {
+            document.querySelectorAll('.mermaid svg').forEach(function(svg) {
+                var vb = svg.getAttribute('viewBox');
+                if (vb) {
+                    var parts = vb.split(/\s+/);
+                    var vbWidth = parseFloat(parts[2]);
+                    var vbHeight = parseFloat(parts[3]);
+                    svg.setAttribute('width', (vbWidth * 0.5) + 'px');
+                    svg.setAttribute('height', (vbHeight * 0.5) + 'px');
+                    svg.style.maxWidth = '100%';
+                }
+            });
+        }, 1500);
     </script>
 </body>
 </html>`
