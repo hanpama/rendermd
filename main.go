@@ -2,22 +2,16 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"html/template"
 	"log"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
@@ -291,8 +285,8 @@ type PageData struct {
 func main() {
 	var (
 		input  = flag.String("i", "", "Input markdown file")
-		output = flag.String("o", "", "Output PDF file (default: input_name.pdf)")
-		browse = flag.Bool("b", false, "Open the rendered PDF")
+		output = flag.String("o", "", "Output file (.pdf or .html, default: input_name.pdf)")
+		browse = flag.Bool("b", false, "Open the rendered file")
 	)
 
 	flag.Parse()
@@ -301,10 +295,10 @@ func main() {
 		if flag.NArg() > 0 {
 			*input = flag.Arg(0)
 		} else {
-			fmt.Println("Usage: rendermd -i input.md [-o output.pdf] [-b]")
-			fmt.Println("   or: rendermd input.md [output.pdf]")
+			fmt.Println("Usage: rendermd -i input.md [-o output.pdf|output.html] [-b]")
+			fmt.Println("   or: rendermd input.md [output.pdf|output.html]")
 			fmt.Println("\nOptions:")
-			fmt.Println("  -b    Open the rendered PDF")
+			fmt.Println("  -b    Open the rendered file")
 			os.Exit(1)
 		}
 	}
@@ -335,13 +329,19 @@ func main() {
 		log.Fatalf("Failed to build HTML: %v", err)
 	}
 
-	pdfBuf, err := renderPDF(htmlStr)
-	if err != nil {
-		log.Fatalf("Failed to render PDF: %v", err)
-	}
-
-	if err := os.WriteFile(*output, pdfBuf, 0644); err != nil {
-		log.Fatalf("Failed to write PDF: %v", err)
+	ext := strings.ToLower(filepath.Ext(*output))
+	if ext == ".html" || ext == ".htm" {
+		if err := os.WriteFile(*output, []byte(htmlStr), 0644); err != nil {
+			log.Fatalf("Failed to write HTML: %v", err)
+		}
+	} else {
+		pdfBuf, err := renderPDF(htmlStr)
+		if err != nil {
+			log.Fatalf("Failed to render PDF: %v", err)
+		}
+		if err := os.WriteFile(*output, pdfBuf, 0644); err != nil {
+			log.Fatalf("Failed to write PDF: %v", err)
+		}
 	}
 
 	fmt.Printf("Successfully rendered %s to %s\n", *input, *output)
@@ -354,7 +354,7 @@ func main() {
 		if err := openFile(absPath); err != nil {
 			log.Fatalf("Failed to open file: %v", err)
 		}
-		fmt.Println("Opened PDF")
+		fmt.Println("Opened")
 	}
 }
 
@@ -405,44 +405,6 @@ func buildHTML(content []byte, title string) (string, error) {
 	}
 
 	return buf.String(), nil
-}
-
-func renderPDF(htmlContent string) ([]byte, error) {
-	ctx, cancel := chromedp.NewContext(context.Background())
-	defer cancel()
-
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	dataURI := "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(htmlContent))
-
-	var pdfBuf []byte
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(dataURI),
-		// Mermaid 렌더링 대기
-		chromedp.Sleep(2*time.Second),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			buf, _, err := page.PrintToPDF().
-				WithPaperWidth(8.27).   // A4
-				WithPaperHeight(11.69). // A4
-				WithMarginTop(0.6).
-				WithMarginBottom(0.6).
-				WithMarginLeft(0.6).
-				WithMarginRight(0.6).
-				WithPrintBackground(true).
-				WithScale(math.Round(1.0*100) / 100).
-				Do(ctx)
-			if err != nil {
-				return err
-			}
-			pdfBuf = buf
-			return nil
-		}),
-	); err != nil {
-		return nil, err
-	}
-
-	return pdfBuf, nil
 }
 
 func openFile(path string) error {
