@@ -54,7 +54,7 @@ static BOOL rmSpin(BOOL (^cond)(void), NSDate *deadline) {
 	return YES;
 }
 
-static char *rmRenderPDF(const char *html, const char *outPath, double timeout, double settle) {
+static char *rmRenderPDF(const char *html, const char *baseDir, const char *outPath, double timeout, double settle) {
 	@autoreleasepool {
 		[NSApplication sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
@@ -76,7 +76,8 @@ static char *rmRenderPDF(const char *html, const char *outPath, double timeout, 
 		window.releasedWhenClosed = NO;
 		window.contentView = webView;
 
-		[webView loadHTMLString:[NSString stringWithUTF8String:html] baseURL:nil];
+		[webView loadHTMLString:[NSString stringWithUTF8String:html]
+		                baseURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:baseDir] isDirectory:YES]];
 		if (!rmSpin(^{ return delegate.loaded; }, deadline)) {
 			return strdup("timed out loading page");
 		}
@@ -135,7 +136,7 @@ func init() {
 	runtime.LockOSThread()
 }
 
-func renderPDF(htmlContent string) ([]byte, error) {
+func renderPDF(htmlContent, baseDir string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "rendermd-")
 	if err != nil {
 		return nil, err
@@ -146,10 +147,12 @@ func renderPDF(htmlContent string) ([]byte, error) {
 
 	cHTML := C.CString(htmlContent)
 	defer C.free(unsafe.Pointer(cHTML))
+	cBase := C.CString(baseDir)
+	defer C.free(unsafe.Pointer(cBase))
 	cPath := C.CString(outPath)
 	defer C.free(unsafe.Pointer(cPath))
 
-	if cErr := C.rmRenderPDF(cHTML, cPath, 30, 2); cErr != nil {
+	if cErr := C.rmRenderPDF(cHTML, cBase, cPath, 30, 2); cErr != nil {
 		defer C.free(unsafe.Pointer(cErr))
 		return nil, errors.New(C.GoString(cErr))
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-func renderPDF(htmlContent string) ([]byte, error) {
+func renderPDF(htmlContent, baseDir string) ([]byte, error) {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 

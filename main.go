@@ -335,7 +335,11 @@ func main() {
 			log.Fatalf("Failed to write HTML: %v", err)
 		}
 	} else {
-		pdfBuf, err := renderPDF(htmlStr)
+		absInput, err := filepath.Abs(*input)
+		if err != nil {
+			log.Fatalf("Failed to get absolute path: %v", err)
+		}
+		pdfBuf, err := renderPDF(htmlStr, filepath.Dir(absInput))
 		if err != nil {
 			log.Fatalf("Failed to render PDF: %v", err)
 		}
