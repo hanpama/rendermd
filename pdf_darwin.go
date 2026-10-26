@@ -54,7 +54,7 @@ static BOOL rmSpin(BOOL (^cond)(void), NSDate *deadline) {
 	return YES;
 }
 
-static char *rmRenderPDF(const char *html, const char *baseDir, const char *outPath, double timeout, double settle) {
+static char *rmRenderPDF(const char *htmlPath, const char *outPath, double timeout, double settle) {
 	@autoreleasepool {
 		[NSApplication sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
@@ -76,8 +76,9 @@ static char *rmRenderPDF(const char *html, const char *baseDir, const char *outP
 		window.releasedWhenClosed = NO;
 		window.contentView = webView;
 
-		[webView loadHTMLString:[NSString stringWithUTF8String:html]
-		                baseURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:baseDir] isDirectory:YES]];
+		// 로컬 이미지를 읽을 수 있도록 파일 시스템 전체에 읽기 권한을 준다
+		[webView loadFileURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:htmlPath]]
+		 allowingReadAccessToURL:[NSURL fileURLWithPath:@"/" isDirectory:YES]];
 		if (!rmSpin(^{ return delegate.loaded; }, deadline)) {
 			return strdup("timed out loading page");
 		}
@@ -125,9 +126,12 @@ import "C"
 
 import (
 	"errors"
+	"html"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"unsafe"
 )
 
@@ -143,16 +147,23 @@ func renderPDF(htmlContent, baseDir string) ([]byte, error) {
 	}
 	defer os.RemoveAll(dir)
 
+	// 상대 경로 이미지가 입력 파일 기준으로 해석되도록 <base>를 넣는다
+	baseURL := (&url.URL{Scheme: "file", Path: baseDir + "/"}).String()
+	htmlContent = strings.Replace(htmlContent, "<head>", `<head>
+    <base href="`+html.EscapeString(baseURL)+`">`, 1)
+
+	htmlPath := filepath.Join(dir, "page.html")
+	if err := os.WriteFile(htmlPath, []byte(htmlContent), 0644); err != nil {
+		return nil, err
+	}
 	outPath := filepath.Join(dir, "out.pdf")
 
-	cHTML := C.CString(htmlContent)
+	cHTML := C.CString(htmlPath)
 	defer C.free(unsafe.Pointer(cHTML))
-	cBase := C.CString(baseDir)
-	defer C.free(unsafe.Pointer(cBase))
 	cPath := C.CString(outPath)
 	defer C.free(unsafe.Pointer(cPath))
 
-	if cErr := C.rmRenderPDF(cHTML, cBase, cPath, 30, 2); cErr != nil {
+	if cErr := C.rmRenderPDF(cHTML, cPath, 30, 2); cErr != nil {
 		defer C.free(unsafe.Pointer(cErr))
 		return nil, errors.New(C.GoString(cErr))
 	}
