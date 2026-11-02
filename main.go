@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -284,8 +286,8 @@ type PageData struct {
 
 func main() {
 	var (
-		input  = flag.String("i", "", "Input markdown file")
-		output = flag.String("o", "", "Output file (.pdf or .html, default: input_name.pdf)")
+		input  = flag.String("i", "", "Input markdown file (- for stdin)")
+		output = flag.String("o", "", "Output file (.pdf or .html, default: input_name.pdf, stdin.pdf for stdin)")
 		browse = flag.Bool("b", false, "Open the rendered file")
 	)
 
@@ -294,27 +296,45 @@ func main() {
 	if *input == "" {
 		if flag.NArg() > 0 {
 			*input = flag.Arg(0)
+		} else if stdinIsRedirected() {
+			*input = "-"
 		} else {
 			fmt.Println("Usage: rendermd -i input.md [-o output.pdf|output.html] [-b]")
 			fmt.Println("   or: rendermd input.md [output.pdf|output.html]")
+			fmt.Println("   or: rendermd - [output.pdf|output.html]")
+			fmt.Println("   or: cat input.md | rendermd [-o output.pdf|output.html] [-b]")
 			fmt.Println("\nOptions:")
 			fmt.Println("  -b    Open the rendered file")
 			os.Exit(1)
 		}
 	}
 
+	inputName := *input
+	if *input == "-" {
+		inputName = "stdin"
+	}
+
 	if *output == "" {
 		if flag.NArg() > 1 {
 			*output = flag.Arg(1)
 		} else {
-			base := strings.TrimSuffix(filepath.Base(*input), filepath.Ext(*input))
+			base := strings.TrimSuffix(filepath.Base(inputName), filepath.Ext(inputName))
 			*output = base + ".pdf"
 		}
 	}
 
-	content, err := os.ReadFile(*input)
+	var content []byte
+	var err error
+	if *input == "-" {
+		content, err = io.ReadAll(os.Stdin)
+		if err == nil && len(bytes.TrimSpace(content)) == 0 {
+			err = errors.New("stdin is empty")
+		}
+	} else {
+		content, err = os.ReadFile(*input)
+	}
 	if err != nil {
-		log.Fatalf("Failed to read input file: %v", err)
+		log.Fatalf("Failed to read input: %v", err)
 	}
 
 	htmlContent, err := renderMarkdown(content)
@@ -322,7 +342,7 @@ func main() {
 		log.Fatalf("Failed to render markdown: %v", err)
 	}
 
-	title := strings.TrimSuffix(filepath.Base(*input), filepath.Ext(*input))
+	title := strings.TrimSuffix(filepath.Base(inputName), filepath.Ext(inputName))
 
 	htmlStr, err := buildHTML(htmlContent, title)
 	if err != nil {
@@ -335,6 +355,7 @@ func main() {
 			log.Fatalf("Failed to write HTML: %v", err)
 		}
 	} else {
+		// stdin 입력의 상대 경로 이미지는 현재 디렉터리 기준으로 찾는다
 		absInput, err := filepath.Abs(*input)
 		if err != nil {
 			log.Fatalf("Failed to get absolute path: %v", err)
@@ -348,7 +369,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("Successfully rendered %s to %s\n", *input, *output)
+	fmt.Printf("Successfully rendered %s to %s\n", inputName, *output)
 
 	if *browse {
 		absPath, err := filepath.Abs(*output)
@@ -360,6 +381,11 @@ func main() {
 		}
 		fmt.Println("Opened")
 	}
+}
+
+func stdinIsRedirected() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice == 0
 }
 
 func renderMarkdown(source []byte) ([]byte, error) {
