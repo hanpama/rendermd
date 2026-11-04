@@ -392,9 +392,8 @@ func renderMarkdown(source []byte) ([]byte, error) {
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.Table,
-			extension.Strikethrough,
 			extension.TaskList,
-			extension.GFM,
+			extension.Linkify,
 			extension.DefinitionList,
 			extension.Footnote,
 			extension.Typographer,
